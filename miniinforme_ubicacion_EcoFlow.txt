@@ -1,0 +1,111 @@
+MINIINFORME DE UBICACIÓN DE ENTREGABLES - ECOFLOW
+Proyecto Final Integrador: El Arquitecto IA
+Autor: Robinson Núñez - Escuela Colombiana de Ingeniería Julio Garavito
+
+1. ENLACES DE LA ENTREGA
+- Código fuente: https://github.com/Robinson677/EcoFlow
+- Video demo (3 a 5 min): https://youtu.be/ErfbVUhtFNQ
+- Documento de Arquitectura (PDF): carpeta docs/ del repositorio, archivo EcoFlow_Documento_de_Arquitectura.pdf (18 páginas).
+
+Como los archivos no se pueden adjuntar en este formulario, este miniinforme indica en qué ruta del repositorio está cada elemento que pide el enunciado. Todas las rutas son relativas a la raíz del repositorio.
+
+2. MAPA GENERAL DEL REPOSITORIO
+- schema.sql: esquema completo de la base de datos, RLS, privilegios y trigger.
+- apply-sql.mjs: script de Node que aplica un archivo SQL de forma atómica (begin/commit/rollback) usando el Session pooler de Supabase.
+- src/: todo el código React + TypeScript, organizado por capas.
+- docs/: Documento de Arquitectura en PDF.
+- README.md: miniinforme dentro del repositorio (resumen, mapa de rutas, arquitectura, ejecución y limitaciones). Se incluye para que cualquier revisor, humano o IA, entienda el proyecto desde la raíz.
+- .env.example y admin.sql.example: plantillas de variables de entorno y de asignación del rol admin. Los archivos reales .env y admin.sql están en .gitignore porque contienen credenciales y correos reales, y no se suben.
+- package.json: dependencias (React 19, Vite, Tailwind CSS 4, supabase-js, zod, react-router-dom, TypeScript).
+- vite.config.ts, tsconfig*.json, eslint.config.js: configuración de compilación y lint.
+
+3. FASE DE ESPECIFICACIÓN Y DISEÑO (ARQUITECTURA)
+
+3.1 Esquema de base de datos
+Archivo: schema.sql, secciones 1 y 2. Contiene las tres tablas pedidas:
+- instaladores: perfil 1 a 1 con auth.users (on delete cascade), con rol instalador o admin.
+- proyectos: clave foránea instalador_id hacia instaladores (on delete set null), estado con check (Pendiente, En Progreso, Completado) y potencia_kw mayor que 0.
+- materiales: clave foránea proyecto_id hacia proyectos (on delete cascade), con cantidad y costo validados por check.
+Los índices están en la sección 2 del mismo archivo. El diagrama entidad-relación está en el PDF, sección 3 (con la tabla de relaciones y su regla de borrado).
+
+3.2 Políticas RLS
+Archivo: schema.sql, secciones 3 y 4. RLS está activo en las tres tablas y todas las políticas son para el rol authenticated.
+- Función public.is_admin() (sección 3): security definer con search_path vacío, para evitar la recursión de políticas.
+- proyectos_select: el instalador solo ve los proyectos con instalador_id igual a su usuario; el administrador ve todos.
+- proyectos_insert_admin y proyectos_delete_admin: solo el administrador crea y elimina.
+- materiales_select y materiales_insert: heredan el permiso del proyecto padre.
+La justificación de cada política está en el PDF, sección 4. Las capturas de la consola de Supabase están en las Figuras 1 y 2 (página 7).
+
+3.3 Privilegios por columna y rol protegido
+Archivo: schema.sql, secciones 5 y 6. Se revocó el update general: el cliente solo puede actualizar proyectos.estado e instaladores.nombre y telefono. El trigger on_auth_user_created crea el perfil con rol instalador al registrarse, de modo que el rol nunca viaja desde el cliente.
+
+3.4 Documento de Especificación Técnica (prompt maestro)
+Ubicación: PDF en docs/, sección 2. Define el rol de la IA, las entidades, las reglas de negocio (RN-01 a RN-08), la seguridad (SEG-01 a SEG-04), la arquitectura (ARQ-01 a ARQ-05) y los criterios de aceptación (CA-01 a CA-05). Cada regla se puede comprobar en el código o en la base de datos.
+
+4. DESARROLLO DEL FRONTEND (REACT)
+El flujo de dependencias es: página o componente, hook, servicio, cliente único de Supabase. Los componentes no importan el cliente.
+
+4.1 Acceso a datos (src/services/)
+- src/services/supabase/client.ts: cliente único, creado con createClient<Database> y variables de entorno.
+- src/services/proyectos.service.ts: consultar, crear y cambiar el estado de proyectos.
+- src/services/instaladores.service.ts: consulta de instaladores para asignar proyectos.
+- src/services/auth.service.ts: inicio y cierre de sesión y lectura del perfil.
+
+4.2 Lógica reutilizable y estado global
+- src/hooks/useProyectos.ts: devuelve proyectos, loading, error, recargar, crear y cambiarEstado. Cancela la actualización si el componente se desmonta.
+- src/hooks/useAuth.ts y src/hooks/useInstaladores.ts: sesión, perfil y lista de instaladores.
+- src/context/AuthContext.ts y src/context/AuthProvider.tsx: sesión, perfil y esAdmin compartidos en toda la aplicación.
+
+4.3 Dashboard con estados
+- src/pages/Dashboard.tsx: tres columnas (Pendiente, En Progreso, Completado) con contador, y tres estados explícitos: cargando, error con botón Reintentar y lista vacía.
+- src/components/proyectos/ProyectoCard.tsx y EstadoBadge.tsx: tarjeta del proyecto, selector para cambiar el estado e insignia de color.
+- src/utils/estados.ts: constantes y funciones puras de los estados.
+- src/components/layout/ProtectedRoute.tsx: protege las rutas y muestra Cargando mientras se resuelve la sesión.
+- src/pages/Login.tsx: inicio de sesión con mensajes genéricos.
+
+4.4 Formulario validado antes de enviar
+- src/components/proyectos/ProyectoForm.tsx: solo muestra el formulario y llama a validarProyecto(). Si hay errores, los muestra por campo y no envía nada a Supabase. Solo el administrador lo ve.
+- src/types/proyecto.schema.ts: esquema zod con las reglas (nombre, cliente y dirección con longitud mínima, potencia positiva y máxima 9999.99, fecha ISO). La validación vive fuera del componente.
+- Los check de PostgreSQL en schema.sql repiten las reglas en el servidor (doble validación).
+
+4.5 Tipado completo
+- src/types/database.types.ts: tipos del esquema (Row, Insert y Update por tabla, y las uniones EstadoProyecto y RolInstalador). El tipo Update de proyectos solo admite estado, igual que el privilegio por columna del SQL.
+- El proyecto compila sin errores con tsc -b y npm run build (el script build de package.json ejecuta ambos).
+
+4.6 Biblioteca de interfaz
+Se usó Tailwind CSS 4. Está integrado con el plugin @tailwindcss/vite en vite.config.ts, y se importa en src/index.css. Las clases se aplican en los componentes de src/components/ y src/pages/.
+
+5. INTEGRACIÓN DE IA EN EL FLUJO
+- Tipos TypeScript propuestos por la IA a partir del esquema y revisados a mano: src/types/database.types.ts. Se verificaron contra schema.sql y con el compilador. En el PDF, sección 8, tabla de prompts, se explica qué se pidió y qué se revisó.
+- Prompt clave de estructura con SDD (Desarrollo Basado en Especificaciones): PDF, sección 8, Prompt 1. Es la base de la organización de src/.
+- Problema técnico complejo resuelto con IA, RLS sin recursión: PDF, sección 8, con la tabla de cinco pasos (enfoque, propuesta, revisión, segunda capa y verificación). El resultado está en schema.sql, función is_admin() y políticas de la sección 4.
+- Otros incidentes documentados en el PDF, sección 8: el SQL Editor que no cargaba (resuelto con apply-sql.mjs), el error de sintaxis por la marca BOM de PowerShell (corregido en apply-sql.mjs con .replace) y un update que respondía OK sin cambiar filas.
+- Control del diseño: las decisiones de stack, modelo de datos, rol protegido y alcance fueron mías; la IA propuso borradores que verifiqué con el compilador, la base real y dos usuarios.
+
+6. PRUEBAS Y EVIDENCIAS (PDF, SECCIÓN 7)
+- Prueba de RLS con dos usuarios: el administrador ve 3 proyectos (Figura 3) y el instalador solo los 2 asignados a él, sin formulario de creación (Figura 4). Esto demuestra el criterio CA-03.
+- Validación: 8 casos de validarProyecto() con entradas válidas e inválidas.
+- Tabla resumen de verificaciones: compilación, aplicación atómica del esquema, creación de proyecto, cambio de estado y RLS activo.
+
+6.1 SEGURIDAD DEL REPOSITORIO
+- .gitignore excluye .env y admin.sql, de modo que claves y correos reales no se publican. Las plantillas .env.example y admin.sql.example solo traen nombres y marcadores.
+- El frontend usa únicamente la clave anónima de Supabase. La protección de los datos no depende de ocultarla, sino de las políticas RLS de schema.sql.
+- La cadena de conexión DATABASE_URL, usada solo con apply-sql.mjs, se define como variable de entorno de la terminal y no se guarda en ningún archivo.
+- Los mensajes de autenticación son genéricos para evitar la enumeración de usuarios (SEG-04).
+
+7. CÓMO EJECUTAR EL PROYECTO
+Los pasos completos están en el PDF, sección 10. En resumen:
+1. git clone https://github.com/Robinson677/EcoFlow.git, luego cd EcoFlow y npm install.
+2. Copiar .env.example a .env y completar las dos variables de Supabase.
+3. Aplicar el esquema: node apply-sql.mjs schema.sql (con DATABASE_URL del Session pooler).
+4. Asignar el rol admin: copiar admin.sql.example a admin.sql, poner el correo real y ejecutar node apply-sql.mjs admin.sql.
+5. npm run dev y abrir http://localhost:5173/login.
+
+8. LIMITACIONES CONOCIDAS (PDF, SECCIÓN 9)
+Se documentan con honestidad: la interfaz aún no gestiona materiales (la tabla, sus tipos y sus políticas ya existen); nadie puede editar cliente o potencia desde la aplicación por el privilegio por columna; Register.tsx llama a Supabase directamente y debe moverse a auth.service.ts; los tipos se escribieron a mano porque la CLI de Supabase dependía de la red; y no hay pruebas automatizadas ni paginación.
+
+9. CORRESPONDENCIA CON LA RÚBRICA
+- Precisión en la arquitectura: schema.sql y PDF, secciones 3 y 4.
+- Calidad del desarrollo React: src/ (services, hooks, context, pages, components, types) y PDF, secciones 5 y 6.
+- Uso estratégico de la IA: PDF, secciones 2 y 8.
+- Entregables: repositorio, PDF en docs/ y video demo.
